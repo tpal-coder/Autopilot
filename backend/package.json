@@ -30,9 +30,6 @@
     "typescript": "^6.0.3",
     "vitest": "^4.1.9"
   },
-  "overrides": {
-    "esbuild": "^0.28.2"
-  },
   "dependencies": {
     "@fastify/cookie": "^11.0.2",
     "@fastify/cors": "^11.2.0",
