@@ -1,3 +1,4 @@
+/* eslint-disable react-hooks/set-state-in-effect */
 "use client";
 
 import Link from "next/link";
@@ -13,17 +14,21 @@ import {
   LogOut,
   Copy,
   Check,
+  Sun,
+  Moon,
+  BarChart,
 } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 
 const navItems = [
-  { href: "/",        icon: LayoutDashboard, label: "Home" },
-  { href: "/chat",    icon: Bot,             label: "AutoPilot" },
-  { href: "/rules",   icon: ListChecks,      label: "Rules" },
-  { href: "/goals",   icon: Target,          label: "Goals" },
-  { href: "/vault",   icon: Vault,           label: "Vault" },
-  { href: "/account", icon: User,            label: "Account" },
+  { href: "/dashboard", icon: LayoutDashboard, label: "Home" },
+  { href: "/chat",      icon: Bot,             label: "AutoPilot" },
+  { href: "/rules",     icon: ListChecks,      label: "Rules" },
+  { href: "/goals",     icon: Target,          label: "Goals" },
+  { href: "/vault",     icon: Vault,           label: "Vault" },
+  { href: "/analytics", icon: BarChart,        label: "Analytics" },
+  { href: "/account",   icon: User,            label: "Account" },
 ];
 
 export default function Sidebar({ publicKey }: { publicKey: string }) {
@@ -34,6 +39,17 @@ export default function Sidebar({ publicKey }: { publicKey: string }) {
 
   const truncated = `${publicKey.slice(0, 6)}...${publicKey.slice(-4)}`;
 
+  const [isLightMode, setIsLightMode] = useState(false);
+
+  useEffect(() => {
+    setIsLightMode(document.body.classList.contains("theme-light"));
+  }, []);
+
+  const toggleTheme = () => {
+    const isLight = document.body.classList.toggle("theme-light");
+    setIsLightMode(isLight);
+  };
+
   const handleCopy = async () => {
     await navigator.clipboard.writeText(publicKey);
     setCopied(true);
@@ -43,7 +59,7 @@ export default function Sidebar({ publicKey }: { publicKey: string }) {
   const handleDisconnect = async () => {
     setDisconnecting(true);
     await fetch("/api/account/disconnect", { method: "POST" });
-    router.push("/onboarding");
+    router.push("/");
   };
 
   return (
@@ -133,6 +149,16 @@ export default function Sidebar({ publicKey }: { publicKey: string }) {
             </button>
           </div>
 
+          <div className="flex gap-2">
+            <button
+              onClick={toggleTheme}
+              className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-xs text-white/40 hover:text-white/80 bg-white/[0.04] hover:bg-white/[0.08] transition-all"
+            >
+              {isLightMode ? <Moon className="w-3.5 h-3.5" /> : <Sun className="w-3.5 h-3.5" />}
+              {isLightMode ? "Night Mode" : "Day Mode"}
+            </button>
+          </div>
+
           <button
             onClick={handleDisconnect}
             disabled={disconnecting}
@@ -145,7 +171,7 @@ export default function Sidebar({ publicKey }: { publicKey: string }) {
       </aside>
 
       {/* ── Mobile Bottom Nav ── */}
-      <nav className="fixed bottom-0 left-0 right-0 h-16 bg-black/80 backdrop-blur-xl border-t border-white/[0.06] flex md:hidden z-30">
+      <nav className="mobile-nav fixed bottom-0 left-0 right-0 h-16 bg-black/80 backdrop-blur-xl border-t border-white/[0.06] flex md:hidden z-30">
         {navItems.map((item) => {
           const isActive = pathname === item.href;
           const Icon = item.icon;
@@ -153,7 +179,7 @@ export default function Sidebar({ publicKey }: { publicKey: string }) {
             <Link key={item.href} href={item.href} className="flex-1">
               <div
                 className={`flex flex-col items-center justify-center h-full gap-1 transition-colors ${
-                  isActive ? "text-blue-400" : "text-white/30"
+                  isActive ? "text-blue-400" : "text-white/40"
                 }`}
               >
                 <Icon className="w-5 h-5" />
@@ -162,6 +188,11 @@ export default function Sidebar({ publicKey }: { publicKey: string }) {
             </Link>
           );
         })}
+        {/* Theme Toggle for Mobile */}
+        <button onClick={toggleTheme} className="flex-1 flex flex-col items-center justify-center h-full gap-1 text-white/40 hover:text-white/80 transition-colors">
+          {isLightMode ? <Moon className="w-5 h-5" /> : <Sun className="w-5 h-5" />}
+          <span className="text-[9px] font-medium">Theme</span>
+        </button>
       </nav>
     </>
   );
