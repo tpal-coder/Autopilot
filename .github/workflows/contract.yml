@@ -20,7 +20,7 @@ jobs:
     - name: Set up Rust
       uses: dtolnay/rust-toolchain@stable
       with:
-        targets: wasm32v1-none
+        targets: wasm32-unknown-unknown
 
     - name: Build Contract
-      run: cargo build --manifest-path contracts/Cargo.toml --target wasm32v1-none --release
+      run: cargo build --manifest-path contracts/Cargo.toml --target wasm32-unknown-unknown --release
