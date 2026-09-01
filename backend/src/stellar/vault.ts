@@ -110,6 +110,59 @@ export async function getVaultBalance(publicKey: string): Promise<VaultBalance> 
   };
 }
 
+export async function getVaultContractBalance(vaultId: string): Promise<number | null> {
+  try {
+    const { Contract, rpc, xdr, Networks, TransactionBuilder } = require("@stellar/stellar-sdk");
+    const AUTOPILOT_PROTOCOL_CONTRACT_ID = process.env.AUTOPILOT_CONTRACT_ID || "CDCNM3U73F3OK34CCTTCKLWDDLJOBG24VTOPXT3IVNVOCNHAVL4WSE4X";
+    const SOROBAN_RPC_URL = process.env.SOROBAN_RPC_URL || "https://soroban-testnet.stellar.org";
+    
+    const contract = new Contract(AUTOPILOT_PROTOCOL_CONTRACT_ID);
+    const vaultIdVal = xdr.ScVal.scvU64(
+      xdr.Uint64.fromString(vaultId)
+    );
+    
+    const invokeOp = contract.call("get_vault", vaultIdVal);
+    
+    const engineKeypair = getEngineKeypair();
+    const engineAccount = await getHorizon().loadAccount(engineKeypair.publicKey());
+    
+    const tx = new TransactionBuilder(engineAccount, {
+      fee: "1000",
+      networkPassphrase: Networks.TESTNET
+    })
+      .addOperation(invokeOp)
+      .setTimeout(30)
+      .build();
+
+    const server = new rpc.Server(SOROBAN_RPC_URL);
+    const simTx = await server.simulateTransaction(tx);
+    
+    if (rpc.Api.isSimulationSuccess(simTx)) {
+      const result = simTx.result.retval;
+      // result is a struct Vault { id: u64, owner: Address, balance: i128, yield_earned: i128 }
+      // The balance is the 3rd field
+      if (result.switch() === xdr.ScValType.scvMap()) {
+        const map = result.map();
+        // To be safe, let's find the 'balance' key. But in Soroban types mapped to scvMap (like struct), 
+        // they are ordered alphabetically or by definition. Wait, `contracttype` structs are arrays (scvVec) or map depending on soroban sdk. Usually maps with symbol keys.
+        // Let's just find the value where key is "balance"
+        const balanceEntry = map?.find((entry: any) => entry.key().sym().toString() === "balance");
+        if (balanceEntry) {
+          const val = balanceEntry.val().i128();
+          // i128 gives hi/lo.
+          const stroops = val.lo().toBigInt() + (val.hi().toBigInt() << 64n);
+          return Number(stroops) / 10000000;
+        }
+      }
+    }
+    return null;
+  } catch (err) {
+    console.warn("Failed to get vault contract balance:", err);
+    return null;
+  }
+}
+
+
 // ── Vault deposits / withdrawals ──────────────────────────────────────────
 
 /**
