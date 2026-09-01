@@ -35,13 +35,17 @@ export async function checkRateLimit(
   const now = Date.now();
   const windowKey = `rl:${key}:${Math.floor(now / (windowSecs * 1000))}`;
 
-  const count = await redis.incr(windowKey);
-  if (count === 1) {
-    await redis.expire(windowKey, windowSecs);
+  try {
+    const count = await redis.incr(windowKey);
+    if (count === 1) {
+      await redis.expire(windowKey, windowSecs);
+    }
+    const allowed = count <= maxRequests;
+    return { allowed, remaining: Math.max(0, maxRequests - count) };
+  } catch (err) {
+    console.error("Redis rate limit error, failing open:", err);
+    return { allowed: true, remaining: maxRequests };
   }
-
-  const allowed = count <= maxRequests;
-  return { allowed, remaining: Math.max(0, maxRequests - count) };
 }
 
 /**
@@ -57,7 +61,12 @@ export async function saveHorizonCursor(publicKey: string, cursor: string): Prom
 export async function getHorizonCursor(publicKey: string): Promise<string | null> {
   const redis = getRedis();
   if (!redis) return null;
-  return await redis.get<string>(`horizon:cursor:${publicKey}`);
+  try {
+    return await redis.get<string>(`horizon:cursor:${publicKey}`);
+  } catch (err) {
+    console.warn(`[Redis] ⚠ Failed to get cursor for ${publicKey.slice(0, 8)}:`, err);
+    return null;
+  }
 }
 
 /**
@@ -66,17 +75,19 @@ export async function getHorizonCursor(publicKey: string): Promise<string | null
 export async function cacheSet(key: string, value: unknown, ttlSecs = 30): Promise<void> {
   const redis = getRedis();
   if (!redis) return;
-  await redis.set(key, JSON.stringify(value), { ex: ttlSecs });
+  try {
+    await redis.set(key, JSON.stringify(value), { ex: ttlSecs });
+  } catch (err) {}
 }
 
 export async function cacheGet<T>(key: string): Promise<T | null> {
   const redis = getRedis();
   if (!redis) return null;
-  const val = await redis.get<string>(key);
-  if (!val) return null;
   try {
-    return JSON.parse(val) as T;
-  } catch {
+    const val = await redis.get<string>(key);
+    if (!val) return null;
+    return typeof val === 'string' ? JSON.parse(val) as T : val as T;
+  } catch (err) {
     return null;
   }
 }
