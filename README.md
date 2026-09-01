@@ -20,7 +20,6 @@
 ## 🔗 Important Links
 
 * **Live Deployment:** [https://autopilot-stellar-mauve.vercel.app](https://autopilot-stellar-mauve.vercel.app) *(Live AutoPilot Application on Vercel)*
-* **GitHub Repository:** [https://github.com/TAPABRATA/Autopilot](https://github.com/TAPABRATA/Autopilot)
 * **Demo Video:** [Watch the AutoPilot MVP Demo](https://youtu.be/OG6kS41sLGg)
 
 ---
