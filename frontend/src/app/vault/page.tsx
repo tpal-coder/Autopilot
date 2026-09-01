@@ -1,13 +1,17 @@
+/* eslint-disable react-hooks/set-state-in-effect, @typescript-eslint/no-explicit-any */
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { toast } from "sonner";
+import Link from "next/link";
 import {
   Vault,
   TrendingUp,
   PiggyBank,
   Plus,
   ArrowDownLeft,
+  ArrowUpRight,
   RefreshCw,
   ExternalLink,
   Loader2,
@@ -113,6 +117,7 @@ function WithdrawModal({
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
+      toast.success(`Successfully withdrew ${amount} ${asset.toUpperCase()}`);
       onSuccess();
       onClose();
     } catch (e: any) {
@@ -199,6 +204,11 @@ function WithdrawModal({
           Funds will be sent to your connected wallet. A minimum reserve of 2.5 XLM must remain in the vault.
         </p>
 
+        <div className="flex items-center justify-between px-3 py-2 bg-white/[0.02] border border-white/[0.04] rounded-lg mb-4 text-[10px] text-white/40">
+          <span>Estimated Network Fee:</span>
+          <span className="font-mono text-white/70">~0.00001 XLM (1-3s)</span>
+        </div>
+
         <button
           onClick={handleWithdraw}
           disabled={loading}
@@ -224,16 +234,19 @@ function VaultCard({
   const meta = VAULT_META[vault.type];
   const Icon = meta.icon;
   const [balance, setBalance] = useState<VaultBalance | null>(null);
+  const [analytics, setAnalytics] = useState<{ raw: number[]; scaled: number[] } | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [showWithdraw, setShowWithdraw] = useState(false);
 
   const fetchBalance = useCallback(async () => {
     setRefreshing(true);
     try {
-      const res = await fetch(`/api/vault/${vault.type}/balance`, {
-        credentials: "include",
-      });
+      const [res, analyticsRes] = await Promise.all([
+        fetch(`/api/vault/${vault.type}/balance`, { credentials: "include" }),
+        fetch(`/api/vault/${vault.type}/analytics`, { credentials: "include" })
+      ]);
       if (res.ok) setBalance(await res.json());
+      if (analyticsRes.ok) setAnalytics(await analyticsRes.json());
     } catch {}
     setRefreshing(false);
   }, [vault.type]);
@@ -344,29 +357,21 @@ function VaultCard({
           )}
         </div>
 
-        {/* Spending Limits (Saurav Kar Feedback) */}
         <div className="bg-slate-900/50 rounded-2xl p-6 border border-slate-700/50 backdrop-blur-md relative overflow-hidden group mb-4">
           <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/5 to-purple-500/5 opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
-          <h3 className="text-white font-medium mb-4 flex items-center gap-2 text-sm">
+          <h3 className="text-white font-medium mb-2 flex items-center gap-2 text-sm">
             <div className="w-6 h-6 rounded-full bg-indigo-500/10 flex items-center justify-center border border-indigo-500/20">
               <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-indigo-400"><path d="M12 2v20"></path><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
             </div>
             Spending Limits
           </h3>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-[10px] text-white/40 uppercase tracking-wider mb-2">Daily (USDC)</label>
-              <input type="number" placeholder="e.g. 50" className="w-full bg-black/40 border border-white/10 rounded-xl px-3 py-1.5 text-white text-xs focus:outline-none focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/50 transition-all" />
-            </div>
-            <div>
-              <label className="block text-[10px] text-white/40 uppercase tracking-wider mb-2">Weekly (USDC)</label>
-              <input type="number" placeholder="e.g. 300" className="w-full bg-black/40 border border-white/10 rounded-xl px-3 py-1.5 text-white text-xs focus:outline-none focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/50 transition-all" />
-            </div>
-          </div>
-          <div className="mt-3 flex justify-end">
-            <button className="text-[10px] uppercase font-bold tracking-wider bg-indigo-500/20 hover:bg-indigo-500/40 text-indigo-300 px-3 py-1.5 rounded-lg transition-colors border border-indigo-500/30">
-              Save Limits
-            </button>
+          <p className="text-xs text-white/40 mb-4">
+            Protect your funds by configuring maximum daily and weekly withdrawal limits.
+          </p>
+          <div className="flex justify-end">
+            <Link href="/account" className="text-[10px] uppercase font-bold tracking-wider bg-indigo-500/20 hover:bg-indigo-500/40 text-indigo-300 px-3 py-1.5 rounded-lg transition-colors border border-indigo-500/30 inline-flex items-center gap-1.5">
+              Configure Limits <ArrowUpRight className="w-3 h-3" />
+            </Link>
           </div>
         </div>
 
@@ -380,15 +385,22 @@ function VaultCard({
             7-Day Growth
           </h3>
           <div className="h-24 flex items-end justify-between gap-2 mt-4 px-2">
-            {[40, 55, 45, 70, 60, 85, 95].map((height, i) => (
-              <div key={i} className="relative flex flex-col items-center group/bar w-full">
-                <div className="w-full bg-emerald-500/20 rounded-t-sm hover:bg-emerald-500/40 transition-all cursor-pointer" style={{ height: `${height}%` }}></div>
-                <div className="opacity-0 group-hover/bar:opacity-100 absolute -top-6 text-[9px] text-emerald-300 font-mono transition-opacity whitespace-nowrap bg-black/50 px-1.5 rounded">+{height}$</div>
-              </div>
-            ))}
+            {(analytics?.scaled || [5, 5, 5, 5, 5, 5, 5]).map((height, i) => {
+              const rawVal = analytics?.raw?.[i] ?? 0;
+              return (
+                <div key={i} className="relative flex flex-col items-center group/bar w-full">
+                  <div className="w-full bg-emerald-500/20 rounded-t-sm hover:bg-emerald-500/40 transition-all cursor-pointer" style={{ height: `${height}%` }}></div>
+                  <div className="opacity-0 group-hover/bar:opacity-100 absolute -top-6 text-[9px] text-emerald-300 font-mono transition-opacity whitespace-nowrap bg-black/50 px-1.5 rounded">+{rawVal}</div>
+                </div>
+              );
+            })}
           </div>
           <div className="flex justify-between mt-2 px-2 text-[9px] text-white/30 uppercase">
-            <span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span>
+            {Array.from({ length: 7 }, (_, i) => {
+              const d = new Date();
+              d.setDate(d.getDate() - 6 + i);
+              return <span key={i}>{d.toLocaleDateString('en-US', { weekday: 'short' })}</span>;
+            })}
           </div>
         </div>
 
@@ -434,6 +446,7 @@ function CreateVaultCard({
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
+      toast.success(`${meta.label} created successfully!`);
       setSuccess(`${meta.label} created! Tx: ${data.fundTxHash?.slice(0, 16)}…`);
       setTimeout(onCreate, 1500);
     } catch (e: any) {
@@ -454,7 +467,11 @@ function CreateVaultCard({
       </div>
       <div>
         <h3 className="text-sm font-semibold text-white mb-1">{meta.label}</h3>
-        <p className="text-xs text-white/35 max-w-[200px] leading-relaxed">{meta.desc}</p>
+        <p className="text-xs text-white/35 max-w-[200px] leading-relaxed mb-3">{meta.desc}</p>
+        <div className="flex flex-col gap-1 items-center bg-black/40 border border-white/5 rounded-lg px-3 py-2 text-[10px] text-white/40">
+          <span>Stellar Account Reserve: ~2.5 XLM</span>
+          <span>Network Fee: ~0.00001 XLM</span>
+        </div>
       </div>
 
       {error && (
