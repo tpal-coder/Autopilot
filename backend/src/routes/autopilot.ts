@@ -117,7 +117,14 @@ export default async function autopilotRoutes(server: FastifyInstance) {
             const memo = rule.memo ?? `AutoPilot: ${rule.action} ${execAmountStr} XLM`;
 
             try {
-              const txHash = await executeRuleTransaction(destination, execAmountStr, memo);
+              let txHash: string;
+              try {
+                const { invokeSorobanRuleExecution } = require("../stellar/soroban");
+                txHash = await invokeSorobanRuleExecution(rule.id, execAmountStr, destination);
+              } catch (sorobanErr: any) {
+                console.warn(`[Engine] ⚠ Soroban keeper failed: ${sorobanErr?.message}. Falling back to native payment.`);
+                txHash = await executeRuleTransaction(destination, execAmountStr, memo);
+              }
 
               await sql`
                 INSERT INTO "AutomatedTransaction" (
