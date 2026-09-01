@@ -19,14 +19,17 @@ import { getDb } from "../lib/db";
 import { executeRuleTransaction } from "../lib/engine";
 import { checkSpendingLimit, recordSpend } from "./limitGuard";
 import { PAYMENT_QUEUE_NAME, PaymentJobData, CronJobData, CRON_QUEUE_NAME, getConnectionOptions } from "./queue";
+import { fetchXLMBalance } from "../stellar/horizon";
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
 function doesPaymentMatchTrigger(trigger: string, asset: string): boolean {
   const t = trigger.toLowerCase();
-  const isXLM = asset === "XLM";
+  
+  // Testnet prototype only supports XLM automated sweeps from the Engine
+  if (asset !== "XLM") return false;
 
-  const matchesTrigger =
+  return (
     t.includes("every payment") ||
     t.includes("payment received") ||
     t.includes("payment") ||
@@ -37,9 +40,8 @@ function doesPaymentMatchTrigger(trigger: string, asset: string): boolean {
     t.includes("salary") ||
     t.includes("income") ||
     t.includes("transfer") ||
-    t.includes("xlm");
-
-  return matchesTrigger && isXLM;
+    t.includes("xlm")
+  );
 }
 
 /**
@@ -52,14 +54,15 @@ export async function processPaymentDirect(data: PaymentJobData): Promise<any> {
 
   console.log(`[Processor] ⚡ Processing ${amount} ${asset} for ${publicKey.slice(0, 8)}…`);
 
-  // ── Step 1: Deduplicate
+  // ── Step 1: Deduplication check
+  // Check if this incoming payment was already processed
   const existing = await sql`
     SELECT 1 FROM "AutomatedTransaction"
-    WHERE "txHash" = ${paymentHorizonId}
+    WHERE "paymentId" = ${paymentHorizonId}
     LIMIT 1
   `;
   if (existing.length > 0) {
-    console.log(`[Processor] ⏭ Already processed ${paymentHorizonId.slice(0, 16)}… — skipping`);
+    console.log(`[Processor] ⏭ Payment ${paymentHorizonId} already processed`);
     return { skipped: true, reason: "duplicate" };
   }
 
@@ -132,7 +135,7 @@ export async function processPaymentDirect(data: PaymentJobData): Promise<any> {
     const action = (rule.action as string).toLowerCase();
     let destination: string | null = null;
 
-    if (action.includes("save") || action.includes("saving")) {
+    if (action.includes("save") || action.includes("saving") || action.includes("buffer")) {
       destination = savingsVault?.publicKey ?? null;
     } else if (action.includes("invest") || action.includes("investment")) {
       destination = investVault?.publicKey ?? null;
@@ -145,17 +148,35 @@ export async function processPaymentDirect(data: PaymentJobData): Promise<any> {
     }
 
     const memo = (rule.memo as string | null) ?? `AutoPilot:${action}`.slice(0, 28);
-    console.log(`[Processor] 🚀 Sending ${execAmountStr} XLM → ${destination.slice(0, 8)}… (${action})`);
+    console.log(`[Processor] 🚀 Sending ${execAmountStr} XLM -> ${destination.slice(0, 8)}... (${action})`);
 
     try {
-      const txHash = await executeRuleTransaction(destination, execAmountStr, memo);
+      let txHash: string;
+
+      // Handle SWAP logic for DCA (Phase 2 Upgrade)
+      if (action.includes("swap") || action.includes("dca")) {
+        const USDC_CODE = "USDC";
+        const USDC_ISSUER = "GBBD47IF6LWK7P7MDEVSCWT73SQGQMTVHFU53E2B6HGFV7NTVZND3M3D"; 
+        const { executeDcaSwap } = require("../stellar/dex");
+        txHash = await executeDcaSwap(destination, execAmountStr, USDC_CODE, USDC_ISSUER);
+      } else {
+        // Try Soroban Keeper first (Tier 1 Upgrade)
+        try {
+          const { invokeSorobanRuleExecution } = require("../stellar/soroban");
+          txHash = await invokeSorobanRuleExecution(rule.id, execAmountStr, destination);
+        } catch (sorobanErr: any) {
+          console.warn(`[Processor] ⚠ Soroban keeper failed: ${sorobanErr?.message}. Falling back to native payment.`);
+          // Standard XLM transfer fallback
+          txHash = await executeRuleTransaction(destination, execAmountStr, memo);
+        }
+      }
 
       await sql`
         INSERT INTO "AutomatedTransaction"
-          (id, "userId", "ruleId", amount, type, memo, "txHash", "createdAt")
+          (id, "userId", "ruleId", amount, type, memo, "txHash", "paymentId", "createdAt")
         VALUES
           (gen_random_uuid(), ${userId}::uuid, ${rule.id}::uuid,
-           ${execAmount}, ${action}, ${memo}, ${txHash}, NOW())
+           ${execAmount}, ${action}, ${memo}, ${txHash}, ${paymentHorizonId}, NOW())
       `;
 
       // ── Step 8: Increment linked Goal's currentAmount ──────────────
@@ -194,13 +215,25 @@ async function processPaymentJob(job: Job<PaymentJobData>) {
 }
 
 async function processCronJob(job: Job<CronJobData>) {
-  const { userId, ruleId, amount, isPercentage, action, memo } = job.data;
+  const { userId, publicKey, ruleId, amount, isPercentage, action, memo } = job.data;
   const sql = getDb();
 
   console.log(`[Processor] ⏰ Cron job for rule ${ruleId}`);
 
-  const execAmount = amount;
-  if (execAmount <= 0) return { skipped: true, reason: "zero_amount" };
+  let execAmount = amount;
+  
+  if (isPercentage) {
+    try {
+      const balance = await fetchXLMBalance(publicKey);
+      execAmount = (amount / 100) * balance;
+      console.log(`[Processor] 💰 Calculated ${amount}% of live balance (${balance} XLM) = ${execAmount} XLM`);
+    } catch (err: any) {
+      console.warn(`[Processor] ⚠ Could not fetch live balance for ${publicKey}:`, err.message);
+      return { skipped: true, reason: "balance_fetch_failed" };
+    }
+  }
+
+  if (execAmount <= 0.0000001) return { skipped: true, reason: "zero_amount" };
 
   const userRows = await sql`
     SELECT id, "dailyLimit", "weeklyLimit" FROM "User" WHERE id = ${userId}::uuid LIMIT 1
@@ -219,7 +252,25 @@ async function processCronJob(job: Job<CronJobData>) {
     return { status: "blocked", reason };
   }
 
-  const destination = process.env.AUTOPILOT_PUBLIC_KEY!;
+  // ── Fetch user's vault as destination ───────────────────────────────────
+  const actionLower = action.toLowerCase();
+  const vaults = await sql`
+    SELECT type, "publicKey" FROM "Vault"
+    WHERE "userId" = ${userId}::uuid
+  `;
+
+  let destination: string | null = null;
+  if (actionLower.includes("save") || actionLower.includes("saving")) {
+    destination = vaults.find((v: any) => v.type === "savings")?.publicKey ?? null;
+  } else if (actionLower.includes("invest") || actionLower.includes("investment")) {
+    destination = vaults.find((v: any) => v.type === "investment")?.publicKey ?? null;
+  }
+
+  if (!destination) {
+    console.warn(`[Processor] ⚠ Cron: No ${actionLower} vault found for user ${userId.slice(0, 8)}… — create one in the Vault tab`);
+    return { skipped: true, reason: "no_vault" };
+  }
+
   const memoText = (memo ?? `AutoPilot:${action}:${execAmount}`).slice(0, 28);
   const execAmountStr = execAmount.toFixed(7);
 
@@ -233,8 +284,8 @@ async function processCronJob(job: Job<CronJobData>) {
          ${execAmount}, ${action.toLowerCase()}, ${memoText}, ${txHash}, NOW())
     `;
     try { await recordSpend(userId, execAmount); } catch {}
-    console.log(`[Processor] ✅ Cron rule "${action}" | ${execAmountStr} XLM | tx: ${txHash.slice(0, 20)}…`);
-    return { status: "executed", txHash, amount: execAmountStr };
+    console.log(`[Processor] ✅ Cron rule "${action}" | ${execAmountStr} XLM → vault ${destination.slice(0, 8)}… | tx: ${txHash.slice(0, 20)}…`);
+    return { status: "executed", txHash, amount: execAmountStr, destination };
   } catch (err: any) {
     console.error(`[Processor] ✗ Cron tx failed:`, err?.message);
     throw err;
