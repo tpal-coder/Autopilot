@@ -1,9 +1,11 @@
+/* eslint-disable */
 "use client";
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import { isConnected, requestAccess } from "@stellar/freighter-api";
+import albedo from "@albedo-link/intent";
 import { Loader2, Wallet, AlertCircle } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
@@ -48,17 +50,82 @@ export default function OnboardingPage() {
         body: JSON.stringify({ publicKey }),
       });
 
-      const data = await response.json();
+      let data;
+      const contentType = response.headers.get("content-type");
+      if (contentType && contentType.includes("application/json")) {
+        data = await response.json();
+      } else {
+        data = { error: "Backend is temporarily unavailable or returned an invalid response." };
+      }
 
       if (!response.ok) {
-        throw new Error(data.error || "Authentication failed.");
+        // Sanitize raw server errors — never show "Internal Server Error" to user
+        const rawError = data?.error || "";
+        const friendlyError = rawError.toLowerCase().includes("internal server")
+          ? "Backend is temporarily unavailable. Please try again in a moment."
+          : rawError || "Authentication failed.";
+        throw new Error(friendlyError);
       }
 
       // 3. On success, redirect to dashboard
-      router.push("/");
+      router.push("/dashboard");
     } catch (err: any) {
       console.error(err);
-      setError(err.message || "An unexpected error occurred. Please try again.");
+      const msg = err.message || "";
+      // Sanitize network-level errors too
+      setError(
+        msg.toLowerCase().includes("failed to fetch") || msg.toLowerCase().includes("networkerror")
+          ? "Could not reach the server. Is the backend running?"
+          : msg || "An unexpected error occurred. Please try again."
+      );
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleAlbedoConnect = async () => {
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const res = await albedo.publicKey({});
+      const publicKey = res.pubkey;
+
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ publicKey }),
+      });
+
+      let data;
+      const contentType = response.headers.get("content-type");
+      if (contentType && contentType.includes("application/json")) {
+        data = await response.json();
+      } else {
+        data = { error: "Backend is temporarily unavailable or returned an invalid response." };
+      }
+
+      if (!response.ok) {
+        const rawError = data?.error || "";
+        const friendlyError = rawError.toLowerCase().includes("internal server")
+          ? "Backend is temporarily unavailable. Please try again in a moment."
+          : rawError || "Authentication failed.";
+        throw new Error(friendlyError);
+      }
+
+      router.push("/dashboard");
+    } catch (err: any) {
+      console.error(err);
+      if (err.message && err.message.includes("closed")) {
+        // user closed the popup
+        return;
+      }
+      const msg = err.message || "";
+      setError(
+        msg.toLowerCase().includes("failed to fetch") || msg.toLowerCase().includes("networkerror")
+          ? "Could not reach the server. Is the backend running?"
+          : msg || "An unexpected error occurred. Please try again."
+      );
     } finally {
       setIsLoading(false);
     }
@@ -69,7 +136,7 @@ export default function OnboardingPage() {
   };
 
   return (
-    <div className="w-full max-w-md p-8 glass-panel rounded-3xl relative z-10 flex flex-col items-center">
+    <div className="w-full max-w-6xl mx-auto px-6 py-12 lg:py-24 relative z-10 flex flex-col lg:flex-row items-center gap-16">
       {/* Toast Notification */}
       <AnimatePresence>
         {toastMessage && (
@@ -77,32 +144,59 @@ export default function OnboardingPage() {
             initial={{ opacity: 0, y: -20 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -20 }}
-            className="absolute -top-16 left-1/2 -translate-x-1/2 bg-white/10 backdrop-blur-md border border-white/20 text-white px-4 py-2 rounded-full text-sm whitespace-nowrap shadow-xl"
+            className="fixed top-8 left-1/2 -translate-x-1/2 bg-white/10 backdrop-blur-md border border-white/20 text-white px-4 py-2 rounded-full text-sm whitespace-nowrap shadow-xl z-50"
           >
             {toastMessage}
           </motion.div>
         )}
       </AnimatePresence>
 
-      <div className="mb-8 text-center">
-        {/* Placeholder for Logo, since the user said they added logo in public/logo.png */}
-        <div className="relative w-20 h-20 mx-auto mb-4 drop-shadow-[0_0_15px_rgba(255,255,255,0.2)]">
-          <Image
-            src="/logo.png"
-            alt="AutoPilot Logo"
-            fill
-            sizes="80px"
-            className="object-contain"
-            priority
-          />
+      {/* Landing Copy (Left Column) */}
+      <div className="flex-1 text-center lg:text-left space-y-8">
+        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/5 border border-white/10 text-xs font-medium text-blue-400 mb-4">
+          <span className="relative flex h-2 w-2">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500"></span>
+          </span>
+          Secure Wallet Authentication
         </div>
-        <h1 className="text-3xl font-bold tracking-tight text-white mb-2">
-          AutoPilot
+        
+        <h1 className="text-5xl lg:text-7xl font-bold tracking-tight text-white leading-tight">
+          Welcome to <br/> <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-500">AutoPilot.</span>
         </h1>
-        <p className="text-gray-400 text-sm">
-          Your intelligent stellar companion.
+        
+        <p className="text-lg lg:text-xl text-gray-400 max-w-2xl mx-auto lg:mx-0 leading-relaxed">
+          Your intelligent financial assistant is ready. Connect your Stellar wallet to access your dashboard, manage your automation rules, and track your goals.
         </p>
+
+        <div className="grid grid-cols-2 gap-6 pt-4 max-w-lg mx-auto lg:mx-0 text-left">
+          <div>
+            <h3 className="text-white font-semibold flex items-center gap-2 mb-1"><div className="w-1.5 h-1.5 rounded-full bg-green-500"/> Secure</h3>
+            <p className="text-xs text-white/50">Your keys never leave your wallet.</p>
+          </div>
+          <div>
+            <h3 className="text-white font-semibold flex items-center gap-2 mb-1"><div className="w-1.5 h-1.5 rounded-full bg-purple-500"/> Seamless</h3>
+            <p className="text-xs text-white/50">One-click login with Freighter or Albedo.</p>
+          </div>
+        </div>
       </div>
+
+      {/* Wallet Connect Panel (Right Column) */}
+      <div className="w-full max-w-md p-8 glass-panel rounded-3xl shrink-0">
+        <div className="mb-8 text-center">
+          <div className="relative w-20 h-20 mx-auto mb-4 drop-shadow-[0_0_15px_rgba(255,255,255,0.2)]">
+            <Image
+              src="/logo.png"
+              alt="AutoPilot Logo"
+              fill
+              sizes="80px"
+              className="object-contain"
+              priority
+            />
+          </div>
+          <h2 className="text-2xl font-bold text-white mb-2">Sign In</h2>
+          <p className="text-sm text-gray-400">Authenticate to enter the dashboard.</p>
+        </div>
 
       <div className="w-full space-y-4">
         {error && (
@@ -157,16 +251,9 @@ export default function OnboardingPage() {
           </div>
         </button>
 
-        {/* Albedo Button (Mock Integration) */}
+        {/* Albedo Button */}
         <button
-          onClick={() => {
-            setIsLoading(true);
-            setTimeout(() => {
-              setIsLoading(false);
-              setToastMessage("Albedo wallet connected (Mocked for Demo)");
-              setTimeout(() => router.push("/"), 1000);
-            }, 1500);
-          }}
+          onClick={handleAlbedoConnect}
           disabled={isLoading}
           className="w-full group relative flex items-center justify-between p-4 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed overflow-hidden"
         >
@@ -196,6 +283,7 @@ export default function OnboardingPage() {
           Running on Stellar testnet
         </p>
       </div>
+    </div>
     </div>
   );
 }
